@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package>
+  <name>pointcloud_to_laserscan</name>
+  <version>1.0.0</version>
+  <description>point cloud to laserscan converter</description>
+  <maintainer email="joydeepb@cs.utexas.edu">Joydeep Biswas</maintainer>
+  <license>LGPLv3</license>
+
+  <depend package="roscpp"/>
+  <depend package="sensor_msgs"/>
+  <depend package="geometry_msgs"/>
+  <depend package="std_msgs"/>
+
+  <export>
+  </export>
+</package>
