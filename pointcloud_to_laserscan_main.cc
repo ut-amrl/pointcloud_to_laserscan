@@ -72,7 +72,7 @@ std::string pointcloud_topic_ = "pointcloud";
 static const Eigen::Affine3f frame_tf_ =
     Eigen::Translation3f(0, 0, 0.85) *
     Eigen::AngleAxisf(0.0, Vector3f::UnitX());
-const std::string target_frame_("base_link");
+const std::string target_frame_("nav_base_link");
 
 #ifdef ROS2
 PublisherPtr<sensor_msgs::msg::LaserScan> scan_publisher_;
