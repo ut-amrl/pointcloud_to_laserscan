@@ -27,6 +27,11 @@
 #include <string.h>
 #include <inttypes.h>
 #include <vector>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <iostream>
+#include <unistd.h>
 
 #include "config_reader/config_reader.h"
 #ifdef ROS2
@@ -70,9 +75,9 @@ std::string laser_topic_ = "scan";
 std::string pointcloud_topic_ = "pointcloud";
 
 static const Eigen::Affine3f frame_tf_ =
-    Eigen::Translation3f(0, 0, 0.85) *
+    Eigen::Translation3f(0, 0, 0.0) *
     Eigen::AngleAxisf(0.0, Vector3f::UnitX());
-const std::string target_frame_("nav_base_link");
+const std::string target_frame_("basenav/base_link");
 
 #ifdef ROS2
 PublisherPtr<sensor_msgs::msg::LaserScan> scan_publisher_;
@@ -81,11 +86,37 @@ PublisherPtr<sensor_msgs::LaserScan> scan_publisher_;
 #endif
 NodePtr node_;
 
+// Signal handling for graceful shutdown
+std::atomic<bool> shutdown_requested{false};
+
+void signalHandler(int signum) {
+    static int signal_count = 0;
+    signal_count++;
+    
+    if (signal_count == 1) {
+        printf("\nReceived signal %d (Ctrl+C), initiating shutdown...\n", signum);
+        shutdown_requested.store(true);
+#ifdef ROS2
+        rclcpp::shutdown();
+#endif
+    } else if (signal_count == 2) {
+        printf("\nReceived second Ctrl+C, forcing exit...\n");
+        exit(1);
+    } else {
+        printf("\nForce killing...\n");
+        exit(2);
+    }
+}
+
 #ifdef ROS2
 void PointcloudCallback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
 #else
 void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
 #endif
+    // Check shutdown flag early to stop processing during shutdown
+    if (shutdown_requested.load()) {
+        return;
+    }
 #ifdef ROS2
     if (FLAGS_v > 1) {
         printf("PointCloud2 message, t=%f\n", msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9);
@@ -189,16 +220,51 @@ int main(int argc, char** argv) {
     google::InitGoogleLogging(argv[0]);
     LoadConfig();
 
+    // Install signal handler BEFORE ROS init to ensure it takes precedence
+    signal(SIGINT, signalHandler);
+    signal(SIGTERM, signalHandler);
+
 #ifdef ROS2
-    ROS_INIT(argc, argv, "pointcloud_to_laserscan");
-    node_ = CREATE_NODE("pointcloud_to_laserscan");
+    try {
+        ROS_INIT(argc, argv, "pointcloud_to_laserscan");
+        node_ = CREATE_NODE("pointcloud_to_laserscan");
 
-    auto pointcloud_sub = CREATE_SUBSCRIBER(node_, sensor_msgs::msg::PointCloud2,
-                                            pointcloud_topic_, 1, PointcloudCallback);
-    scan_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::msg::LaserScan,
-                                       laser_topic_, 1);
+        auto pointcloud_sub = CREATE_SUBSCRIBER(node_, sensor_msgs::msg::PointCloud2,
+                                                pointcloud_topic_, 1, PointcloudCallback);
+        scan_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::msg::LaserScan,
+                                           laser_topic_, 1);
 
-    ROS_SPIN();
+        // Spin until shutdown
+        rclcpp::spin(node_);
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in ROS2 node: " << e.what() << std::endl;
+    }
+    
+    printf("Shutting down gracefully...\n");
+    
+    // CRITICAL: Set shutdown flag immediately to stop callbacks
+    shutdown_requested.store(true);
+    
+    // Give any in-flight callbacks a moment to finish
+    printf("  [1/4] Waiting for callbacks to finish...\n");
+    usleep(150000);  // 150ms
+    
+    // Uninstall signal handlers before cleanup
+    printf("  [2/4] Uninstalling signal handlers...\n");
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
+    
+    // Properly destroy ROS2 objects before shutdown
+    printf("  [3/4] Destroying ROS2 publisher and node...\n");
+    scan_publisher_.reset();
+    node_.reset();
+    
+    printf("  [4/4] Shutting down ROS2...\n");
+    if (rclcpp::ok()) {
+        ROS_SHUTDOWN();
+    }
+    
+    printf("Cleanup complete.\n");
 #else
     ROS_INIT(argc, argv, "pointcloud_to_laserscan");
     node_ = CREATE_NODE("pointcloud_to_laserscan");
@@ -206,7 +272,27 @@ int main(int argc, char** argv) {
     ros::Subscriber pointcloud_sub = CREATE_SUBSCRIBER(node_, sensor_msgs::PointCloud2, pointcloud_topic_, 1, &PointcloudCallback);
     scan_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::LaserScan, laser_topic_, 1);
 
-    ROS_SPIN();
+    // Spin until shutdown
+    ros::spin();
+    
+    printf("Shutting down gracefully...\n");
+    
+    // Set shutdown flag immediately to stop callbacks
+    shutdown_requested.store(true);
+    
+    // Give any in-flight callbacks a moment to finish
+    usleep(150000);  // 150ms
+    
+    // Uninstall signal handlers before cleanup
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTERM, SIG_DFL);
+    
+    // Clean shutdown
+    scan_publisher_.reset();
+    node_.reset();
+    ROS_SHUTDOWN();
+    
+    printf("Cleanup complete.\n");
 #endif
 
     return 0;
