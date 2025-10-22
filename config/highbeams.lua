@@ -8,4 +8,5 @@ pointcloud_to_laser = {
   num_ranges = 1000;
   laser_topic = "velodyne_2dscan_highbeams";
   pointcloud_topic = "velodyne_points";
+  debug_pointcloud_topic = "debug_pointcloud_highbeams";
 }

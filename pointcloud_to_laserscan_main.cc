@@ -73,6 +73,7 @@ float min_sq_range_ = 0;
 float max_sq_range_ = FLT_MAX;
 std::string laser_topic_ = "scan";
 std::string pointcloud_topic_ = "pointcloud";
+std::string debug_pointcloud_topic_ = "debug_pointcloud";
 
 static const Eigen::Affine3f frame_tf_ =
     Eigen::Translation3f(0, 0, 0.0) *
@@ -81,8 +82,10 @@ const std::string target_frame_("basenav/base_link");
 
 #ifdef ROS2
 PublisherPtr<sensor_msgs::msg::LaserScan> scan_publisher_;
+PublisherPtr<sensor_msgs::msg::PointCloud2> debug_pc_publisher_;
 #else
 PublisherPtr<sensor_msgs::LaserScan> scan_publisher_;
+PublisherPtr<sensor_msgs::PointCloud2> debug_pc_publisher_;
 #endif
 NodePtr node_;
 
@@ -133,6 +136,10 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
     for (float& r : laser_msg_.ranges) {
         r = FLT_MAX;
     }
+    
+    // Vector to store filtered points for debug visualization
+    std::vector<Vector3f> filtered_points;
+    
     // Iterate through pointcloud
 #ifdef ROS2
     for (sensor_msgs::PointCloud2ConstIterator<float>
@@ -162,6 +169,8 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
             (angle - laser_msg_.angle_min) / laser_msg_.angle_increment));
         if (idx < laser_msg_.ranges.size() && laser_msg_.ranges[idx] > sq_range) {
             laser_msg_.ranges[idx] = sq_range;
+            // Store this point for debug visualization
+            filtered_points.push_back(p);
         }
     }
 
@@ -172,10 +181,66 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
             r = 0;
         }
     }
+    
+    // Create debug PointCloud2 message with filtered points
+#ifdef ROS2
+    sensor_msgs::msg::PointCloud2 debug_pc_msg;
+#else
+    sensor_msgs::PointCloud2 debug_pc_msg;
+#endif
+    debug_pc_msg.header = laser_msg_.header;
+    debug_pc_msg.header.frame_id = target_frame_;
+    debug_pc_msg.height = 1;
+    debug_pc_msg.width = filtered_points.size();
+    debug_pc_msg.is_bigendian = false;
+    debug_pc_msg.is_dense = true;
+    
+    // Set point cloud fields
+    debug_pc_msg.fields.resize(3);
+    debug_pc_msg.fields[0].name = "x";
+    debug_pc_msg.fields[0].offset = 0;
+#ifdef ROS2
+    debug_pc_msg.fields[0].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    debug_pc_msg.fields[0].count = 1;
+    debug_pc_msg.fields[1].name = "y";
+    debug_pc_msg.fields[1].offset = 4;
+    debug_pc_msg.fields[1].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    debug_pc_msg.fields[1].count = 1;
+    debug_pc_msg.fields[2].name = "z";
+    debug_pc_msg.fields[2].offset = 8;
+    debug_pc_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
+#else
+    debug_pc_msg.fields[0].datatype = sensor_msgs::PointField::FLOAT32;
+    debug_pc_msg.fields[0].count = 1;
+    debug_pc_msg.fields[1].name = "y";
+    debug_pc_msg.fields[1].offset = 4;
+    debug_pc_msg.fields[1].datatype = sensor_msgs::PointField::FLOAT32;
+    debug_pc_msg.fields[1].count = 1;
+    debug_pc_msg.fields[2].name = "z";
+    debug_pc_msg.fields[2].offset = 8;
+    debug_pc_msg.fields[2].datatype = sensor_msgs::PointField::FLOAT32;
+    debug_pc_msg.fields[2].count = 1;
+#endif
+    
+    debug_pc_msg.point_step = 12;  // 3 * 4 bytes
+    debug_pc_msg.row_step = debug_pc_msg.point_step * debug_pc_msg.width;
+    debug_pc_msg.data.resize(debug_pc_msg.row_step);
+    
+    // Fill in the point data
+    for (size_t i = 0; i < filtered_points.size(); ++i) {
+        const Vector3f& p = filtered_points[i];
+        float* data_ptr = reinterpret_cast<float*>(&debug_pc_msg.data[i * debug_pc_msg.point_step]);
+        data_ptr[0] = p.x();
+        data_ptr[1] = p.y();
+        data_ptr[2] = p.z();
+    }
+    
 #ifdef ROS2
     scan_publisher_->publish(laser_msg_);
+    debug_pc_publisher_->publish(debug_pc_msg);
 #else
     scan_publisher_.publish(laser_msg_);
+    debug_pc_publisher_.publish(debug_pc_msg);
 #endif
 }
 
@@ -191,6 +256,7 @@ void LoadConfig() {
     CONFIG_FLOAT(num_ranges, "pointcloud_to_laser.num_ranges");
     CONFIG_STRING(pointcloud_topic_, "pointcloud_to_laser.pointcloud_topic");
     CONFIG_STRING(laser_topic_, "pointcloud_to_laser.laser_topic");
+    CONFIG_STRING(debug_pointcloud_topic_, "pointcloud_to_laser.debug_pointcloud_topic");
 
     config_reader::ConfigReader reader({FLAGS_config});
 
@@ -213,6 +279,7 @@ void LoadConfig() {
     max_sq_range_ = Sq(CONFIG_range_max);
     laser_topic_ = CONFIG_laser_topic_;
     pointcloud_topic_ = CONFIG_pointcloud_topic_;
+    debug_pointcloud_topic_ = CONFIG_debug_pointcloud_topic_;
 }
 
 int main(int argc, char** argv) {
@@ -233,6 +300,8 @@ int main(int argc, char** argv) {
                                                 pointcloud_topic_, 1, PointcloudCallback);
         scan_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::msg::LaserScan,
                                            laser_topic_, 1);
+        debug_pc_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::msg::PointCloud2,
+                                               debug_pointcloud_topic_, 1);
 
         // Spin until shutdown
         rclcpp::spin(node_);
@@ -257,6 +326,7 @@ int main(int argc, char** argv) {
     // Properly destroy ROS2 objects before shutdown
     printf("  [3/4] Destroying ROS2 publisher and node...\n");
     scan_publisher_.reset();
+    debug_pc_publisher_.reset();
     node_.reset();
     
     printf("  [4/4] Shutting down ROS2...\n");
@@ -271,6 +341,7 @@ int main(int argc, char** argv) {
 
     ros::Subscriber pointcloud_sub = CREATE_SUBSCRIBER(node_, sensor_msgs::PointCloud2, pointcloud_topic_, 1, &PointcloudCallback);
     scan_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::LaserScan, laser_topic_, 1);
+    debug_pc_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::PointCloud2, debug_pointcloud_topic_, 1);
 
     // Spin until shutdown
     ros::spin();
@@ -289,6 +360,7 @@ int main(int argc, char** argv) {
     
     // Clean shutdown
     scan_publisher_.reset();
+    debug_pc_publisher_.reset();
     node_.reset();
     ROS_SHUTDOWN();
     
