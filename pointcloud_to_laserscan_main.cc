@@ -195,8 +195,8 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
     debug_pc_msg.is_bigendian = false;
     debug_pc_msg.is_dense = true;
     
-    // Set point cloud fields
-    debug_pc_msg.fields.resize(3);
+    // Set point cloud fields (x, y, z, intensity)
+    debug_pc_msg.fields.resize(4);
     debug_pc_msg.fields[0].name = "x";
     debug_pc_msg.fields[0].offset = 0;
 #ifdef ROS2
@@ -209,6 +209,11 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
     debug_pc_msg.fields[2].name = "z";
     debug_pc_msg.fields[2].offset = 8;
     debug_pc_msg.fields[2].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    debug_pc_msg.fields[2].count = 1;
+    debug_pc_msg.fields[3].name = "intensity";
+    debug_pc_msg.fields[3].offset = 12;
+    debug_pc_msg.fields[3].datatype = sensor_msgs::msg::PointField::FLOAT32;
+    debug_pc_msg.fields[3].count = 1;
 #else
     debug_pc_msg.fields[0].datatype = sensor_msgs::PointField::FLOAT32;
     debug_pc_msg.fields[0].count = 1;
@@ -220,19 +225,30 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
     debug_pc_msg.fields[2].offset = 8;
     debug_pc_msg.fields[2].datatype = sensor_msgs::PointField::FLOAT32;
     debug_pc_msg.fields[2].count = 1;
+    debug_pc_msg.fields[3].name = "intensity";
+    debug_pc_msg.fields[3].offset = 12;
+    debug_pc_msg.fields[3].datatype = sensor_msgs::PointField::FLOAT32;
+    debug_pc_msg.fields[3].count = 1;
 #endif
     
-    debug_pc_msg.point_step = 12;  // 3 * 4 bytes
+    debug_pc_msg.point_step = 16;  // 4 * 4 bytes (x, y, z, intensity)
     debug_pc_msg.row_step = debug_pc_msg.point_step * debug_pc_msg.width;
     debug_pc_msg.data.resize(debug_pc_msg.row_step);
     
-    // Fill in the point data
+    // Fill in the point data with intensity based on distance from origin
     for (size_t i = 0; i < filtered_points.size(); ++i) {
         const Vector3f& p = filtered_points[i];
         float* data_ptr = reinterpret_cast<float*>(&debug_pc_msg.data[i * debug_pc_msg.point_step]);
         data_ptr[0] = p.x();
         data_ptr[1] = p.y();
         data_ptr[2] = p.z();
+        
+        // Calculate intensity based on distance from origin (2D distance in XY plane)
+        float distance = sqrt(p.x() * p.x() + p.y() * p.y());
+        // Normalize intensity to 0-1 range based on max range, then scale to 0-255 for better visualization
+        float max_range = sqrt(max_sq_range_);
+        float normalized_distance = std::min(distance / max_range, 1.0f);
+        data_ptr[3] = normalized_distance * 255.0f;  // intensity field
     }
     
 #ifdef ROS2
