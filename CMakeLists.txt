@@ -1,5 +1,5 @@
-PROJECT(pointcloud_to_laserscan)
 CMAKE_MINIMUM_REQUIRED(VERSION 3.8)
+PROJECT(pointcloud_to_laserscan)
 
 MESSAGE(STATUS "Compilers found: ${CMAKE_CXX_COMPILER_LIST}")
 MESSAGE(STATUS "Using compiler: ${CMAKE_CXX_COMPILER}")
@@ -44,7 +44,7 @@ if(${ROS_VERSION} EQUAL "1")
   INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR})
   INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/config_reader/include)
 
-  SET(libs roslib roscpp glog gflags ${LUA_LIBRARIES})
+  SET(libs roslib roscpp glog gflags ${LUA_LIBRARIES} tf2 tf2_ros tf2_eigen)
 
   ROSBUILD_ADD_EXECUTABLE(pointcloud_to_laserscan
       pointcloud_to_laserscan_main.cc
@@ -62,6 +62,9 @@ elseif(${ROS_VERSION} EQUAL "2")
   find_package(std_msgs REQUIRED)
   find_package(geometry_msgs REQUIRED)
   find_package(sensor_msgs REQUIRED)
+  find_package(tf2 REQUIRED)
+  find_package(tf2_ros REQUIRED)
+  find_package(tf2_eigen REQUIRED)
   
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(LUA REQUIRED lua5.1)
@@ -94,6 +97,9 @@ elseif(${ROS_VERSION} EQUAL "2")
     std_msgs
     geometry_msgs
     sensor_msgs
+    tf2
+    tf2_ros
+    tf2_eigen
   )
   
   target_link_libraries(pointcloud_to_laserscan
@@ -114,7 +120,7 @@ elseif(${ROS_VERSION} EQUAL "2")
   )
 
   # Export runtime dependencies
-  ament_export_dependencies(rclcpp std_msgs geometry_msgs sensor_msgs)
+  ament_export_dependencies(rclcpp std_msgs geometry_msgs sensor_msgs tf2 tf2_ros tf2_eigen)
 
   ament_package()
 

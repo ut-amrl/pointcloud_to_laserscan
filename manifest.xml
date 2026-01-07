@@ -10,6 +10,8 @@
   <depend package="sensor_msgs"/>
   <depend package="geometry_msgs"/>
   <depend package="std_msgs"/>
+  <depend package="tf2"/>
+  <depend package="tf2_ros"/>
 
   <export>
   </export>

@@ -9,4 +9,6 @@ pointcloud_to_laser = {
   laser_topic = "velodyne_2dscan_highbeams";
   pointcloud_topic = "velodyne_points";
   debug_pointcloud_topic = "debug_pointcloud_highbeams";
+  target_frame = "";
+  source_frame_override = "";
 }

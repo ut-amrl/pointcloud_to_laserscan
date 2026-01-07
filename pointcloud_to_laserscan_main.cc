@@ -48,6 +48,10 @@
 #include "eigen3/Eigen/Dense"
 #include "eigen3/Eigen/Geometry"
 #include "ros_compat.h"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/buffer.h"
+#include "tf2_eigen/tf2_eigen.hpp"
+#include "tf2/transform_datatypes.h"
 #include <cfloat>
 
 using Eigen::Vector2f;
@@ -74,11 +78,8 @@ float max_sq_range_ = FLT_MAX;
 std::string laser_topic_ = "scan";
 std::string pointcloud_topic_ = "pointcloud";
 std::string debug_pointcloud_topic_ = "debug_pointcloud";
-
-static const Eigen::Affine3f frame_tf_ =
-    Eigen::Translation3f(0, 0, 0.0) *
-    Eigen::AngleAxisf(0.0, Vector3f::UnitX());
-const std::string target_frame_("basenav/base_link");
+std::string target_frame_;
+std::string source_frame_override_;
 
 #ifdef ROS2
 PublisherPtr<sensor_msgs::msg::LaserScan> scan_publisher_;
@@ -87,7 +88,31 @@ PublisherPtr<sensor_msgs::msg::PointCloud2> debug_pc_publisher_;
 PublisherPtr<sensor_msgs::LaserScan> scan_publisher_;
 PublisherPtr<sensor_msgs::PointCloud2> debug_pc_publisher_;
 #endif
+std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
 NodePtr node_;
+
+Eigen::Affine3f GetTransform(const std::string& source_frame, const std::string& target_frame,
+                              const Time& stamp) {
+    Eigen::Affine3f transform = Eigen::Affine3f::Identity();
+
+    try {
+#ifdef ROS2
+        geometry_msgs::msg::TransformStamped tf_stamped =
+            tf_buffer_->lookupTransform(target_frame, source_frame, stamp);
+        transform = tf2::transformToEigen(tf_stamped.transform).cast<float>();
+#else
+        geometry_msgs::TransformStamped tf_stamped =
+            tf_buffer_->lookupTransform(target_frame, source_frame, stamp);
+        transform = tf2::transformToEigen(tf_stamped.transform).cast<float>();
+#endif
+    } catch (const tf2::TransformException& ex) {
+        printf("WARN: TF lookup failed: %s. Using identity transform.\n", ex.what());
+    }
+
+    return transform;
+}
 
 // Signal handling for graceful shutdown
 std::atomic<bool> shutdown_requested{false};
@@ -125,13 +150,27 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
         printf("PointCloud2 message, t=%f\n", msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9);
     }
     laser_msg_.header = msg->header;
+    const std::string source_frame = source_frame_override_.empty() ? 
+                                      msg->header.frame_id : source_frame_override_;
+    Time stamp(rclcpp::Time(msg->header.stamp));
 #else
     if (FLAGS_v > 1) {
         printf("PointCloud2 message, t=%f\n", msg.header.stamp.toSec());
     }
     laser_msg_.header = msg.header;
+    const std::string source_frame = source_frame_override_.empty() ? 
+                                      msg.header.frame_id : source_frame_override_;
+    Time stamp = msg.header.stamp;
 #endif
-    laser_msg_.header.frame_id = target_frame_;
+
+    // Handle frame transformation
+    Eigen::Affine3f frame_tf = Eigen::Affine3f::Identity();
+    if (!target_frame_.empty()) {
+        laser_msg_.header.frame_id = target_frame_;
+        frame_tf = GetTransform(source_frame, target_frame_, stamp);
+    } else {
+        laser_msg_.header.frame_id = source_frame;
+    }
 
     for (float& r : laser_msg_.ranges) {
         r = FLT_MAX;
@@ -155,7 +194,7 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
         if (!isfinite(*iter_x) || !isfinite(*iter_y) || !isfinite(*iter_z)) {
             continue;
         }
-        const Vector3f p = frame_tf_ * Vector3f(*iter_x, *iter_y, *iter_z);
+        const Vector3f p = frame_tf * Vector3f(*iter_x, *iter_y, *iter_z);
 
         if (p.z() > max_height_ || p.z() < min_height_) {
             continue;
@@ -189,7 +228,7 @@ void PointcloudCallback(const sensor_msgs::PointCloud2& msg) {
     sensor_msgs::PointCloud2 debug_pc_msg;
 #endif
     debug_pc_msg.header = laser_msg_.header;
-    debug_pc_msg.header.frame_id = target_frame_;
+    debug_pc_msg.header.frame_id = laser_msg_.header.frame_id;
     debug_pc_msg.height = 1;
     debug_pc_msg.width = filtered_points.size();
     debug_pc_msg.is_bigendian = false;
@@ -273,6 +312,8 @@ void LoadConfig() {
     CONFIG_STRING(pointcloud_topic_, "pointcloud_to_laser.pointcloud_topic");
     CONFIG_STRING(laser_topic_, "pointcloud_to_laser.laser_topic");
     CONFIG_STRING(debug_pointcloud_topic_, "pointcloud_to_laser.debug_pointcloud_topic");
+    CONFIG_STRING(target_frame_, "pointcloud_to_laser.target_frame");
+    CONFIG_STRING(source_frame_override_, "pointcloud_to_laser.source_frame_override");
 
     config_reader::ConfigReader reader({FLAGS_config});
 
@@ -296,6 +337,8 @@ void LoadConfig() {
     laser_topic_ = CONFIG_laser_topic_;
     pointcloud_topic_ = CONFIG_pointcloud_topic_;
     debug_pointcloud_topic_ = CONFIG_debug_pointcloud_topic_;
+    target_frame_ = CONFIG_target_frame_;
+    source_frame_override_ = CONFIG_source_frame_override_;
 }
 
 int main(int argc, char** argv) {
@@ -311,6 +354,9 @@ int main(int argc, char** argv) {
     try {
         ROS_INIT(argc, argv, "pointcloud_to_laserscan");
         node_ = CREATE_NODE("pointcloud_to_laserscan");
+
+        tf_buffer_ = std::make_shared<tf2_ros::Buffer>(node_->get_clock());
+        tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
         auto pointcloud_sub = CREATE_SUBSCRIBER(node_, sensor_msgs::msg::PointCloud2,
                                                 pointcloud_topic_, 1, PointcloudCallback);
@@ -354,6 +400,9 @@ int main(int argc, char** argv) {
 #else
     ROS_INIT(argc, argv, "pointcloud_to_laserscan");
     node_ = CREATE_NODE("pointcloud_to_laserscan");
+
+    tf_buffer_ = std::make_shared<tf2_ros::Buffer>();
+    tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
 
     ros::Subscriber pointcloud_sub = CREATE_SUBSCRIBER(node_, sensor_msgs::PointCloud2, pointcloud_topic_, 1, &PointcloudCallback);
     scan_publisher_ = CREATE_PUBLISHER(node_, sensor_msgs::LaserScan, laser_topic_, 1);
