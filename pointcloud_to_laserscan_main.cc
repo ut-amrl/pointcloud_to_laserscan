@@ -50,7 +50,13 @@
 #include "ros_compat.h"
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/buffer.h"
-#include "tf2_eigen/tf2_eigen.hpp"
+#if __has_include(<tf2_eigen/tf2_eigen.hpp>)
+#include <tf2_eigen/tf2_eigen.hpp>
+#elif __has_include(<tf2_eigen/tf2_eigen.h>)
+#include <tf2_eigen/tf2_eigen.h>
+#else
+#error "tf2_eigen headers not found"
+#endif
 #include "tf2/transform_datatypes.h"
 #include <cfloat>
 
