@@ -66,6 +66,25 @@ elseif(${ROS_VERSION} EQUAL "2")
   find_package(tf2_ros REQUIRED)
   find_package(tf2_eigen REQUIRED)
   
+  find_package(glog QUIET)
+  if(NOT glog_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GLOG REQUIRED libglog)
+    add_library(glog::glog INTERFACE IMPORTED)
+    set_target_properties(glog::glog PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${GLOG_INCLUDE_DIRS}"
+      INTERFACE_LINK_LIBRARIES "${GLOG_LIBRARIES}")
+  endif()
+  find_package(gflags QUIET)
+  if(NOT gflags_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GFLAGS REQUIRED gflags)
+    add_library(gflags INTERFACE IMPORTED)
+    set_target_properties(gflags PROPERTIES
+      INTERFACE_INCLUDE_DIRECTORIES "${GFLAGS_INCLUDE_DIRS}"
+      INTERFACE_LINK_LIBRARIES "${GFLAGS_LIBRARIES}")
+  endif()
+
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(LUA REQUIRED lua5.1)
   
@@ -103,7 +122,7 @@ elseif(${ROS_VERSION} EQUAL "2")
   )
   
   target_link_libraries(pointcloud_to_laserscan
-      glog
+      glog::glog
       gflags
       ${LUA_LIBRARIES}
   )
